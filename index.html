@@ -496,6 +496,7 @@ body{padding-bottom:40px}
               >
             <div class="team-search-drop" id="sel-team-a-drop"></div>
           </div>
+          <button onclick="viewInIntel(getSelectedTeam('a'))" title="View in Team Intel" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:11px;padding:2px 6px;border-radius:4px;font-family:'DM Sans',sans-serif;white-space:nowrap;opacity:0.7;transition:opacity .15s" onmouseover="this.style.opacity=1;this.style.color='var(--blue)'" onmouseout="this.style.opacity=0.7;this.style.color='var(--muted)'">Intel →</button>
         </div>
         <div class="tc-right">
           <select class="cv-select tc-year-sel" id="sel-year-a" onchange="calc()"></select>
@@ -506,9 +507,6 @@ body{padding-bottom:40px}
         </div>
       </div>
       <div id="stats-a" class="stat-line"></div>
-      <div style="text-align:right;margin-top:6px">
-        <button onclick="viewInIntel(getSelectedTeam('a'))" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:'DM Sans',sans-serif;opacity:0.8">View in Team Intel →</button>
-      </div>
     </div>
     <!-- Team B -->
     <div class="team-card team-card-b">
@@ -523,6 +521,7 @@ body{padding-bottom:40px}
               >
             <div class="team-search-drop" id="sel-team-b-drop"></div>
           </div>
+          <button onclick="viewInIntel(getSelectedTeam('b'))" title="View in Team Intel" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:11px;padding:2px 6px;border-radius:4px;font-family:'DM Sans',sans-serif;white-space:nowrap;opacity:0.7;transition:opacity .15s" onmouseover="this.style.opacity=1;this.style.color='var(--red)'" onmouseout="this.style.opacity=0.7;this.style.color='var(--muted)'">Intel →</button>
         </div>
         <div class="tc-right">
           <select class="cv-select tc-year-sel" id="sel-year-b" onchange="calc()"></select>
@@ -533,9 +532,6 @@ body{padding-bottom:40px}
         </div>
       </div>
       <div id="stats-b" class="stat-line"></div>
-      <div style="text-align:right;margin-top:6px">
-        <button onclick="viewInIntel(getSelectedTeam('b'))" style="font-size:11px;color:var(--red);background:none;border:none;cursor:pointer;padding:0;font-family:'DM Sans',sans-serif;opacity:0.8">View in Team Intel →</button>
-      </div>
     </div>
   </div>
 
