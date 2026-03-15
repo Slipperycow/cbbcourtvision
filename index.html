@@ -964,12 +964,25 @@ function ttWrap(label, inner, dir, cls) {
 }
 
 function mdToHtml(text) {
-  let parts = text.split('**');
-  let out = '';
-  for (let i = 0; i < parts.length; i++) {
-    out += i % 2 === 1 ? '<strong>' + parts[i] + '</strong>' : parts[i];
-  }
-  return out.split('\n').join('<br>');
+  return text
+    .split('\n\n').map(block => {
+      // Headers
+      if (block.startsWith('# '))  return '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:6px">' + inlineMd(block.slice(2)) + '</div>';
+      if (block.startsWith('## ')) return '<div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">' + inlineMd(block.slice(3)) + '</div>';
+      // Bullet lists
+      const lines = block.split('\n');
+      if (lines.every(l => l.match(/^[-*] /))) {
+        return '<ul style="margin:0 0 2px 16px;padding:0">' + lines.map(l => '<li style="margin-bottom:3px">' + inlineMd(l.slice(2)) + '</li>').join('') + '</ul>';
+      }
+      // Regular paragraph
+      return '<p style="margin:0 0 10px;line-height:1.6">' + lines.map(inlineMd).join('<br>') + '</p>';
+    }).join('');
+}
+
+function inlineMd(text) {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>');
 }
 
 function $$(id) { return document.getElementById(id); }
@@ -2544,7 +2557,7 @@ async function generateInsight() {
   const reqBody = {
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 1000,
-    system: 'You are a college basketball analytics expert. Be direct, analytical, and reference specific numbers. Never hallucinate betting lines.',
+    system: 'You are a college basketball analytics expert. Be direct, analytical, and reference specific numbers. Never hallucinate betting lines. Do not use a title or header at the start — go straight into analysis. Use **bold** for key points. Keep paragraphs short and punchy.',
     messages: [{ role: 'user', content: prompt }]
   };
   
@@ -2578,7 +2591,7 @@ async function generateInsight() {
     }
     const text = (Array.isArray(data.content) ? data.content : []).filter(b => b && b.type === 'text').map(b => b.text).join('');
     if (!text) throw new Error('No text in response');
-    out.innerHTML = mdToHtml(text) +
+    out.innerHTML = '<div style="font-size:13px;color:var(--text);line-height:1.6;border-top:1px solid var(--border);padding-top:14px;margin-top:4px">' + mdToHtml(text) + '</div>' +
       '<div class="followup-row">' +
         '<input class="followup-input" id="followup-input" placeholder="Ask a follow-up question..." onkeydown="if(event.key===\'Enter\')askFollowup()">' +
         '<button class="followup-btn" onclick="askFollowup()">Ask</button>' +
@@ -2600,56 +2613,62 @@ async function askFollowup() {
   const q = inp.value.trim();
   if (!q) return;
   inp.value = '';
-  
-  const out = $$('insight-output');
+  inp.disabled = true;
+
+  const out = $$('cmp-output');
   const useSearch = $$('search-toggle') && $$('search-toggle').checked;
-  
+
   _matchupConversation.push({ role: 'user', content: q });
-  if (_matchupConversation.length > 6) _matchupConversation = _matchupConversation.slice(-6);
-  
-  out.innerHTML += '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)"><span style="color:var(--muted)">Thinking...</span></div>';
-  
+  if (_matchupConversation.length > 10) _matchupConversation = _matchupConversation.slice(-10);
+
+  // Append Q bubble + thinking placeholder
+  const msgId = 'followup-msg-' + Date.now();
+  const qDiv = document.createElement('div');
+  qDiv.style.cssText = 'border-top:1px solid var(--border);margin-top:12px;padding-top:12px';
+  qDiv.innerHTML =
+    '<div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">Follow-up</div>' +
+    '<div style="font-size:13px;color:var(--blue);margin-bottom:8px;font-style:italic">' + q + '</div>' +
+    '<div id="' + msgId + '" style="font-size:13px;color:var(--muted)">Thinking...</div>';
+  // Insert before the followup-row
+  const followupRow = out.querySelector('.followup-row');
+  if (followupRow) out.insertBefore(qDiv, followupRow);
+  else out.appendChild(qDiv);
+
   const reqBody = {
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 1000,
-    system: 'You are a college basketball analytics expert. Context: ' + (_cmpA ? _cmpA.name : '') + ' vs ' + (_cmpB ? _cmpB.name : '') + '. Be direct and reference specific numbers.',
+    system: 'You are a college basketball analytics expert. Context: ' + (_cmpA ? _cmpA.name : '') + ' vs ' + (_cmpB ? _cmpB.name : '') + '. Be direct and reference specific numbers. No title. Short paragraphs. Use **bold** for key points.',
     messages: _matchupConversation
   };
   if (useSearch) reqBody.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
-  
+
   try {
     const apiKey = getApiKey();
     const headers = { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' };
     if (apiKey) headers['x-api-key'] = apiKey;
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(reqBody)
-    });
+    const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify(reqBody) });
     let data;
     try { data = await resp.json(); } catch(jsonErr) {
       const raw = await resp.text().catch(() => 'no body');
-      out.innerHTML = '<span style="color:var(--red)">Parse error (HTTP ' + resp.status + '): ' + raw.slice(0,200) + '</span>';
-      btn.disabled = false; btn.textContent = '✨ Generate AI Matchup Insight'; return;
+      $$(msgId).innerHTML = '<span style="color:var(--red)">Parse error: ' + raw.slice(0,200) + '</span>';
+      inp.disabled = false; return;
     }
     if (!resp.ok || !data.content) {
       const msg = data.error ? data.error.message : ('HTTP ' + resp.status);
-      out.innerHTML += '<span style="color:var(--red)">API error: ' + msg + '</span>';
-      return;
+      $$(msgId).innerHTML = '<span style="color:var(--red)">API error: ' + msg + '</span>';
+      inp.disabled = false; return;
     }
     const text = (Array.isArray(data.content) ? data.content : []).filter(b => b && b.type === 'text').map(b => b.text).join('');
     if (!text) throw new Error('No text in response');
     _matchupConversation.push({ role: 'assistant', content: text });
-    
-    out.innerHTML = out.innerHTML.replace('<span style="color:var(--muted)">Thinking...</span>', mdToHtml(text));
-    out.innerHTML += '<div class="followup-row">' +
-      '<input class="followup-input" id="followup-input" placeholder="Ask a follow-up..." onkeydown="if(event.key===\'Enter\')askFollowup()">' +
-      '<button class="followup-btn" onclick="askFollowup()">Ask</button>' +
-    '</div>';
+    $$(msgId).innerHTML = '<div style="line-height:1.6">' + mdToHtml(text) + '</div>';
   } catch(e) {
-    out.innerHTML += '<span style="color:var(--red)">' + e.message + '</span>';
+    $$(msgId).innerHTML = '<span style="color:var(--red)">' + e.message + '</span>';
   }
+  inp.disabled = false;
+  inp.focus();
 }
+  
 
 // ── ABOUT MODAL ────────────────────────────────────────────────────────────
 function showAbout() {
