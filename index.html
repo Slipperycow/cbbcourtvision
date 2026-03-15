@@ -1276,10 +1276,13 @@ function setTab(t, btn) {
   btn.classList.add('active');
   
   if (t === 'history') {
-    const teamA = getSelectedTeam('a');
     const hi = $$('hist-team-input');
-    if (hi) { hi.value = teamA; hi.dataset.team = teamA; }
-    populateHistYears(teamA);
+    // Only auto-sync to Team A if no team has been manually selected yet
+    if (hi && !hi.dataset.team) {
+      const teamA = getSelectedTeam('a');
+      hi.value = teamA; hi.dataset.team = teamA;
+      populateHistYears(teamA);
+    }
     renderHistoryTab();
   }
   if (t === 'bracket') {
