@@ -788,7 +788,7 @@ body{padding-bottom:40px}
 <script>
 // ── DATA CONSTANTS ────────────────────────────────────────────────────────
 const SIGMA_TOURNEY = 8.61;
-const SIGMA_REG     = 7.58;
+const SIGMA_REG     = 7.61;
 const AVG_TEMPO  = 67.356;
 const HOME_ADJ   = 3.75;
 const SCORE_K    = 0.000001416;  // proj = K*OE*DE*tA*tB, fitted on 7,086 neutral-site games 2016+
@@ -2324,7 +2324,10 @@ function renderHistoryTab() {
     const locLabel = {'h':'vs','a':'@','n':'N'};
     const schedHtml = function(filter) {
       let rows = st.sched.slice().reverse();
-      if (filter === 'q1')   rows = rows.filter(r => r[4] <= 30);
+      if (filter === 'q1')   rows = rows.filter(r => {
+        const rank = r[4]; const loc = r[5];
+        return loc==='a' ? rank<=30 : loc==='n' ? rank<=50 : rank<=75;
+      });
       if (filter === 'loss') rows = rows.filter(r => r[2] < r[3]);
       if (filter === 'bw') rows = rows.filter(r => r[2] > r[3] && (r[2]-r[3]) >= 15);
       if (filter === 'sw') rows = rows.filter(r => r[2] > r[3] && (r[2]-r[3]) >= 6 && (r[2]-r[3]) < 15);
