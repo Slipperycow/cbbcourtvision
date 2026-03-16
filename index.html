@@ -327,6 +327,16 @@ body{padding-bottom:40px}
 
   /* Win prob bar labels */
   .wp-label{font-size:11px}
+
+  /* Bracket: tighter region tabs on mobile */
+  .bracket-rtab{padding:5px 10px;font-size:12px}
+  /* Bracket game cards: slightly smaller text */
+  .bk-team{font-size:11px;padding:6px 8px}
+  .bk-name{font-size:11px}
+  /* Simulation table: hide middle round columns, keep key ones */
+  .surv-table .surv-hide-mobile{display:none}
+  /* FF layout: stack on mobile */
+  .ff-layout{grid-template-columns:1fr;gap:10px}
 }
 
 /* Schedule context grid - side by side on desktop, stacked on mobile */
@@ -347,7 +357,7 @@ body{padding-bottom:40px}
 
 /* Bracket tree */
 .bk-region{display:grid;grid-template-columns:repeat(4,1fr);gap:0;position:relative;overflow-x:auto}
-.bk-col{display:flex;flex-direction:column;justify-content:space-around;padding:0 6px;min-width:160px}
+.bk-col{display:flex;flex-direction:column;justify-content:space-around;padding:0 6px;min-width:170px}
 .bk-col-hdr{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;text-align:center;padding:6px 0 10px;font-family:DM Mono,monospace}
 .bk-game{background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin:4px 0;overflow:hidden;position:relative}
 .bk-team{display:flex;align-items:center;padding:7px 10px;cursor:pointer;transition:background .12s;gap:8px;font-size:12px;font-family:DM Mono,monospace}
@@ -5624,15 +5634,79 @@ document.addEventListener('DOMContentLoaded', authCheck);
 // ── BRACKET TRACKER (injected) ────────────────────────────────────────────
 
 // ══════════════════════════════════════════════════════════════
-// BRACKET TRACKER v2
+// BRACKET TRACKER v3 — Mar 16 2026
+// Enhancements: localStorage persistence, 10k Monte Carlo,
+// market odds comparison, pick progress, AI bracket analysis
 // ══════════════════════════════════════════════════════════════
 
 const BRACKET_MATCHUPS = [[1,16],[8,9],[5,12],[4,13],[6,11],[3,14],[7,10],[2,15]];
 const REGIONS = ['East','West','South','Midwest'];
+const BRACKET_SIM_N = 10000;  // Monte Carlo simulation count
+const BRACKET_STORE_KEY = 'cv_bracket_2026';  // localStorage key — update each season
+
+// 2026 championship market implied odds (BetMGM/DraftKings opening lines, Selection Sunday)
+// Positive odds → implied% = 100/(odds+100)*100
+// null = not available / too long to matter
+const BRACKET_MARKET_ODDS_2026 = {
+  'Michigan':       23.5,  // +325
+  'Duke':           23.1,  // +333
+  'Arizona':        19.0,  // +425
+  'Florida':        14.3,  // +600
+  'Houston':         9.1,  // +1000
+  'Iowa St.':        4.8,  // +2000
+  'Purdue':          3.8,  // +2500
+  'UConn':           3.2,  // +3000
+  'Gonzaga':         2.9,  // +3500 (approx)
+  'Michigan St.':    2.8,  // +3500
+  'Kansas':          2.4,  // +4000
+  'Arkansas':        2.0,  // +5000
+  'Illinois':        2.0,  // +5000
+  'Auburn':          2.0,  // +5000
+  'Alabama':         1.6,  // +6000
+  "St. John's":      1.6,  // +6000
+  'Tennessee':       1.6,  // +6000
+  'Virginia':        1.3,  // +7500
+  'BYU':             1.2,  // +8000
+  'Nebraska':        1.2,  // +8000
+  'Texas Tech':      1.0,  // +10000 approx
+  'Villanova':       0.9,  // longshot
+};
 
 // Bracket state
 let _bracket = null;
 let _bRegionTab = 'East';
+
+// ── LOCALSTORAGE PERSISTENCE ──────────────────────────────────
+function saveBracketPicks() {
+  if (!_bracket) return;
+  try {
+    localStorage.setItem(BRACKET_STORE_KEY, JSON.stringify(_bracket.results));
+  } catch(e) { /* localStorage unavailable in some contexts */ }
+}
+
+function loadBracketPicks() {
+  try {
+    const saved = localStorage.getItem(BRACKET_STORE_KEY);
+    return saved ? JSON.parse(saved) : {};
+  } catch(e) { return {}; }
+}
+
+function clearBracketPicks() {
+  try { localStorage.removeItem(BRACKET_STORE_KEY); } catch(e) {}
+}
+
+// ── PICK PROGRESS ─────────────────────────────────────────────
+function countPicks() {
+  if (!_bracket) return { made: 0, total: 63, ff: 0 };
+  const all = Object.keys(_bracket.results);
+  const ff  = all.filter(k => k.includes('_FF')).length;
+  const main = all.filter(k => !k.includes('_FF')).length;
+  return { made: main, total: 63, ff };
+}
+
+function isPickComplete() {
+  return countPicks().made >= 63;
+}
 
 // ── INIT ──────────────────────────────────────────────────────
 function initBracketTab() {
@@ -5698,7 +5772,7 @@ function autoLoadSeededBracket() {
     ff1regions,
     ff2regions,
     games: buildGameTree(regionData, ff1regions, ff2regions),
-    results: {}
+    results: loadBracketPicks()  // restore saved picks from localStorage
   };
 
   resolveGames();
@@ -5949,6 +6023,7 @@ function pickWinner(gameId, teamName) {
     clearDownstream(gameId);
     _bracket.results[gameId] = teamName;
   }
+  saveBracketPicks();
   resolveGames();
   renderBracket();
 }
@@ -5970,15 +6045,54 @@ function renderBracket() {
   const root = $$('bracket-root');
   if (!root) return;
 
-  const tabs = [...REGIONS, 'Final Four', 'Survival'];
-  let html = '<div class="bracket-region-tabs">' +
+  // Pick progress
+  const { made, total } = countPicks();
+  const pct = Math.round(made / total * 100);
+  const hasPicks = made > 0;
+  const complete  = made >= total;
+  const savedIndicator = made > 0
+    ? '<span style="font-size:10px;color:var(--muted);margin-left:6px">💾 saved</span>'
+    : '';
+
+  const analyzeLabel = complete
+    ? '✨ Analyze My Bracket'
+    : made > 0
+      ? '✨ Analyze (' + made + ' picks so far)'
+      : '✨ Analyze (make picks first)';
+
+  const pickBar =
+    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">' +
+      '<div style="flex:1;min-width:160px">' +
+        '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px">' +
+          '<span>' + made + '/' + total + ' picks made' + (complete ? ' ✓' : '') + '</span>' +
+          savedIndicator +
+        '</div>' +
+        '<div style="height:4px;background:var(--surface2);border-radius:2px;overflow:hidden">' +
+          '<div style="height:100%;width:' + pct + '%;background:' + (complete ? 'var(--green)' : 'var(--blue)') + ';transition:width .3s;border-radius:2px"></div>' +
+        '</div>' +
+      '</div>' +
+      '<button onclick="generateBracketAnalysis()" ' +
+        (hasPicks ? '' : 'disabled ') +
+        'style="padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:' + (hasPicks ? 'pointer' : 'default') + ';' +
+        'background:' + (hasPicks ? 'var(--blue)' : 'var(--surface2)') + ';' +
+        'color:' + (hasPicks ? '#fff' : 'var(--muted)') + ';' +
+        'border:1px solid ' + (hasPicks ? 'var(--blue)' : 'var(--border)') + ';' +
+        'font-family:DM Sans,sans-serif;white-space:nowrap">' +
+        analyzeLabel +
+      '</button>' +
+    '</div>' +
+    '<div id="bracket-ai-output"></div>';
+
+  const tabs = [...REGIONS, 'Final Four', 'Simulation'];
+  let html = pickBar +
+    '<div class="bracket-region-tabs">' +
     tabs.map(t => '<button class="bracket-rtab' + (t === _bRegionTab ? ' active' : '') + '" onclick="setBracketTab(\'' + t + '\')">' + t + '</button>').join('') +
-    '<button style="margin-left:auto;padding:5px 12px;font-size:12px;background:none;border:1px solid var(--border);border-radius:6px;color:var(--muted);cursor:pointer" onclick="confirmResetBracket()">↺ Reset picks</button>' +
-    '<button style="margin-left:6px;padding:5px 12px;font-size:12px;background:none;border:1px solid var(--border);border-radius:6px;color:var(--muted);cursor:pointer" onclick="_bracket=null;renderBracketSetup()">⚙ Setup</button>' +
+    '<button style="margin-left:auto;padding:5px 12px;font-size:12px;background:none;border:1px solid var(--border);border-radius:6px;color:var(--muted);cursor:pointer" onclick="confirmResetBracket()">↺ Reset</button>' +
+    '<button style="margin-left:6px;padding:5px 12px;font-size:12px;background:none;border:1px solid var(--border);border-radius:6px;color:var(--muted);cursor:pointer" onclick="_bracket=null;clearBracketPicks();renderBracketSetup()">⚙ Setup</button>' +
     '</div>';
 
   if (_bRegionTab === 'Final Four') html += renderFinalFour();
-  else if (_bRegionTab === 'Survival') html += renderSurvivalTable();
+  else if (_bRegionTab === 'Simulation') html += renderSurvivalTable();
   else html += renderRegion(_bRegionTab);
 
   root.innerHTML = html;
@@ -5989,6 +6103,7 @@ function setBracketTab(tab) { _bRegionTab = tab; renderBracket(); }
 function confirmResetBracket() {
   if (!_bracket) return;
   _bracket.results = {};
+  clearBracketPicks();
   resolveGames();
   renderBracket();
 }
@@ -6030,6 +6145,7 @@ function renderGame(game) {
   const decided = !!game.winner;
   const wp1 = getGameWP(game);
   const projWinner = !decided ? getProjectedWinner(game) : null;
+  const isExpanded = _bkExpanded.has(game.id);
 
   function teamRow(team, wp) {
     if (!team) return '<div class="bk-team bk-tbd"><span class="bk-seed">·</span><span class="bk-name">TBD</span></div>';
@@ -6040,24 +6156,101 @@ function renderGame(game) {
     if (isWinner) cls += ' bk-winner';
     else if (isElim) cls += ' bk-eliminated';
     else if (isProj) cls += ' bk-projected';
-    const safeId = game.id.replace(/'/g, "\\'");
+    const safeId   = game.id.replace(/'/g, "\\'");
     const safeName = team.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    // Team color accent for winners
     const teamColor = (isWinner || isProj) ? (getTeamColor(team.name) || null) : null;
     const accentStyle = teamColor ? ' style="border-left:3px solid ' + ensureContrast(teamColor) + '"' : '';
     const emStr = team.em !== undefined && team.em !== null && team.name !== 'FF Winner'
       ? '<span class="bk-em">' + (team.em >= 0 ? '+' : '') + team.em.toFixed(1) + '</span>'
       : '';
+    // Team name — plain text, clicking picks the winner (standard behavior)
+    const nameEl = '<span class="bk-name">' + bkShort(team.name || 'TBD') + '</span>';
     return '<div class="' + cls + '"' + accentStyle + ' onclick="pickWinner(\'' + safeId + '\',\'' + safeName + '\')">' +
       '<span class="bk-seed">' + (team.seed || '·') + '</span>' +
-      '<span class="bk-name">' + bkShort(team.name) + '</span>' +
-      emStr +
+      nameEl +
       (!decided && team.name !== 'TBD' && team.name !== 'FF Winner' ? '<span class="bk-wp">' + (wp*100).toFixed(0) + '%</span>' : '') +
       (isWinner ? '<span style="color:var(--green);font-size:10px;margin-left:2px">✓</span>' : '') +
       '</div>';
   }
 
-  return '<div class="bk-game">' + teamRow(game.t1, wp1) + teamRow(game.t2, 1-wp1) + '</div>';
+  // Detail panel — shown when expanded
+  let detailPanel = '';
+  if (isExpanded && game.t1 && game.t2 && game.t1.name !== 'TBD' && game.t2.name !== 'TBD' && game.t1.name !== 'FF Winner' && game.t2.name !== 'FF Winner') {
+    const wpPct  = (wp1 * 100).toFixed(0);
+    const wpPct2 = (100 - wp1 * 100).toFixed(0);
+    const isFav1 = (game.t1.em||0) >= (game.t2.em||0);
+    const favName = isFav1 ? game.t1.name : game.t2.name;
+    const emDiff  = Math.abs((game.t1.em||0) - (game.t2.em||0)).toFixed(1);
+    const safe1   = game.t1.name.replace(/'/g, "\\'");
+    const safe2   = game.t2.name.replace(/'/g, "\\'");
+
+    // Real team colors
+    const raw1 = typeof getTeamColor === 'function' ? getTeamColor(game.t1.name) : null;
+    const raw2 = typeof getTeamColor === 'function' ? getTeamColor(game.t2.name) : null;
+    const col1 = (typeof ensureContrast === 'function' && raw1) ? ensureContrast(raw1) : 'var(--blue)';
+    const col2 = (typeof ensureContrast === 'function' && raw2) ? ensureContrast(raw2) : 'var(--red)';
+
+    // Projected score — bkShort for fav label
+    let projStr = '';
+    if (typeof projScore === 'function' && typeof adjTempo === 'function') {
+      const tempo = adjTempo(game.t1.t || 67.4, game.t2.t || 67.4);
+      const s1 = projScore(game.t1.oe || 104, game.t2.de || 104, tempo);
+      const s2 = projScore(game.t2.oe || 104, game.t1.de || 104, tempo);
+      projStr =
+        '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;font-family:DM Mono,monospace">' +
+          'Proj ' + s1.toFixed(0) + '\u2013' + s2.toFixed(0) +
+          ' \u00b7 ' + bkShort(favName) + ' \u2212' + emDiff +
+        '</div>';
+    }
+
+    // Team name buttons in detail panel — full name + EM, click opens Team Intel
+    const em1str = game.t1.em !== undefined ? (game.t1.em >= 0 ? '+' : '') + game.t1.em.toFixed(1) : '';
+    const em2str = game.t2.em !== undefined ? (game.t2.em >= 0 ? '+' : '') + game.t2.em.toFixed(1) : '';
+    const t1btn = '<button onclick="event.stopPropagation();bkGoIntel(\'' + safe1 + '\')" ' +
+      'style="background:none;border:none;padding:0;cursor:pointer;font-size:12px;font-weight:700;' +
+      'color:' + col1 + ';font-family:DM Mono,monospace" title="Open in Team Intel">' +
+      bkShort(game.t1.name) + '</button>' +
+      '<span style="font-size:10px;color:var(--muted);margin-left:5px">' + em1str + '</span>';
+    const t2btn = '<button onclick="event.stopPropagation();bkGoIntel(\'' + safe2 + '\')" ' +
+      'style="background:none;border:none;padding:0;cursor:pointer;font-size:12px;font-weight:700;' +
+      'color:' + col2 + ';font-family:DM Mono,monospace" title="Open in Team Intel">' +
+      bkShort(game.t2.name) + '</button>' +
+      '<span style="font-size:10px;color:var(--muted);margin-left:5px">' + em2str + '</span>';
+
+    detailPanel =
+      '<div style="padding:8px 10px 10px;border-top:1px solid var(--border);background:var(--bg)">' +
+        '<div style="display:flex;height:3px;border-radius:2px;overflow:hidden;margin-bottom:7px">' +
+          '<div style="width:' + wpPct  + '%;background:' + col1 + '"></div>' +
+          '<div style="width:' + wpPct2 + '%;background:' + col2 + '"></div>' +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px">' +
+          '<div>' + t1btn + '<span style="font-size:10px;color:var(--muted);margin-left:4px">' + wpPct  + '%</span></div>' +
+          '<div style="text-align:right">' + t2btn + '<span style="font-size:10px;color:var(--muted);margin-left:4px">' + wpPct2 + '%</span></div>' +
+        '</div>' +
+        projStr +
+        '<button onclick="event.stopPropagation();bkGoMatchup(\'' + safe1 + '\',\'' + safe2 + '\')" ' +
+          'style="width:100%;padding:7px 0;font-size:12px;font-weight:600;background:var(--blue);color:#fff;' +
+          'border:none;border-radius:6px;cursor:pointer;font-family:DM Sans,sans-serif">' +
+          '\u26a1 Open Full Matchup' +
+        '</button>' +
+      '</div>';
+  }
+
+  // Expand toggle button — only show when both teams are known
+  const canExpand = game.t1 && game.t2 && game.t1.name !== 'TBD' && game.t2.name !== 'TBD' && game.t1.name !== 'FF Winner';
+  const safeGameId = game.id.replace(/'/g, "\\'");
+  const expandBtn = canExpand
+    ? '<div style="text-align:center;padding:2px 0;border-top:1px solid var(--border);cursor:pointer;font-size:9px;color:var(--muted)" onclick="event.stopPropagation();bkToggleExpand(\'' + safeGameId + '\')">' +
+        (isExpanded ? '▲ hide' : '▼ analyze') +
+      '</div>'
+    : '';
+
+  return '<div class="bk-game">' +
+    teamRow(game.t1, wp1) +
+    teamRow(game.t2, 1-wp1) +
+    expandBtn +
+    detailPanel +
+  '</div>';
 }
 
 // ── FINAL FOUR ─────────────────────────────────────────────────
@@ -6090,11 +6283,11 @@ function renderSurvivalTable() {
     const rd = _bracket.regions[region];
     for (let s = 1; s <= 16; s++) {
       const t = rd[s];
-      if (t && !seen.has(t.name)) { seen.add(t.name); teams.push(t); }
+      if (t && !t.ffPair && !seen.has(t.name)) { seen.add(t.name); teams.push(t); }
     }
   });
 
-  const N = 4000;
+  const N = BRACKET_SIM_N;
   const counts = {};
   teams.forEach(t => { counts[t.name] = {R64:0,R32:0,S16:0,E8:0,F4:0,CHAMP:0}; });
   const roundKeys = ['R64','R32','S16','E8','F4','CHAMP'];
@@ -6114,27 +6307,77 @@ function renderSurvivalTable() {
     });
   }
 
-  teams.sort((a,b) => (counts[b.name]?.F4||0) - (counts[a.name]?.F4||0));
+  // Sort by championship %
+  teams.sort((a,b) => (counts[b.name]?.CHAMP||0) - (counts[a.name]?.CHAMP||0));
+
+  // Check if user has a champion pick
+  const champPick = _bracket.results['CHAMP'] || null;
 
   let html = '<div class="surv-table-wrap">';
-  html += '<div style="font-size:12px;color:var(--muted);margin-bottom:10px">' + N + ' simulations · click games in region tabs to lock picks</div>';
-  html += '<table class="surv-table"><thead><tr><th class="lbl">Team</th><th>Seed</th><th>EM</th>';
-  roundKeys.forEach(r => { html += '<th>' + r + '</th>'; });
-  html += '</tr></thead><tbody>';
+  html += '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5">' +
+    N.toLocaleString() + ' simulations using pre-tournament KenPom ratings · ' +
+    '<span style="color:var(--yellow)">Market%</span> = championship implied probability from opening lines · ' +
+    '<span style="color:var(--green)">+edge</span> = model likes this team more than market' +
+    '</div>';
+
+  html += '<table class="surv-table"><thead><tr>' +
+    '<th class="lbl">Team</th>' +
+    '<th title="NCAA seed">Seed</th>' +
+    '<th title="KenPom AdjEM">EM</th>' +
+    '<th class="surv-hide-mobile" title="Round of 64 survival %">R64</th>' +
+    '<th class="surv-hide-mobile" title="Round of 32 survival %">R32</th>' +
+    '<th title="Sweet 16 %">S16</th>' +
+    '<th title="Elite Eight %">E8</th>' +
+    '<th title="Final Four %">F4</th>' +
+    '<th title="Championship % (model)">Champ</th>' +
+    '<th title="Championship implied % from market odds">Market</th>' +
+    '<th title="Model minus market — positive = model likes this team more">Edge</th>' +
+    '</tr></thead><tbody>';
 
   teams.forEach(t => {
     const c = counts[t.name] || {};
-    html += '<tr><td class="lbl">' + bkShort(t.name) + '</td>';
+    const champPct  = (c.CHAMP||0) / N * 100;
+    const marketPct = BRACKET_MARKET_ODDS_2026[t.name] || null;
+    const edge      = marketPct != null ? (champPct - marketPct) : null;
+    const isChampPick = champPick && champPick === t.name;
+
+    const edgeStr = edge != null
+      ? (edge >= 0 ? '+' : '') + edge.toFixed(1) + '%'
+      : '—';
+    const edgeColor = edge == null ? 'var(--muted)'
+      : edge >= 3 ? 'var(--green)'
+      : edge <= -3 ? 'var(--warn)'
+      : 'var(--muted)';
+
+    const champStr = champPct > 0.5 ? champPct.toFixed(1) + '%' : '—';
+    const champColor = champPct >= 15 ? 'var(--green)'
+      : champPct >= 5 ? 'var(--yellow)'
+      : champPct >= 1 ? 'var(--text)'
+      : 'var(--muted)';
+
+    const rowStyle = isChampPick ? ' style="background:rgba(79,202,122,.06)"' : '';
+
+    html += '<tr' + rowStyle + '>';
+    html += '<td class="lbl">' + bkShort(t.name) + (isChampPick ? ' <span style="color:var(--green);font-size:9px">★ pick</span>' : '') + '</td>';
     html += '<td style="color:var(--muted)">' + (t.seed||'?') + '</td>';
-    html += '<td>' + (t.em>=0?'+':'') + (t.em||0).toFixed(1) + '</td>';
-    roundKeys.forEach(r => {
+    html += '<td style="color:var(--text)">' + (t.em>=0?'+':'') + (t.em||0).toFixed(1) + '</td>';
+
+    ['R64','R32','S16','E8','F4'].forEach(r => {
       const p = ((c[r]||0)/N*100);
       const cls = p>=50?'surv-high':p>=15?'surv-mid':'surv-low';
-      html += '<td class="' + cls + '">' + (p>0.5?p.toFixed(0)+'%':'—') + '</td>';
+      const mobileHide = (r==='R64'||r==='R32') ? ' surv-hide-mobile' : '';
+      html += '<td class="' + cls + mobileHide + '">' + (p>0.5?p.toFixed(0)+'%':'—') + '</td>';
     });
+
+    html += '<td style="font-weight:700;color:' + champColor + '">' + champStr + '</td>';
+    html += '<td style="color:var(--yellow)">' + (marketPct != null ? marketPct.toFixed(1)+'%' : '—') + '</td>';
+    html += '<td style="font-weight:' + (Math.abs(edge||0) >= 3 ? '700' : '400') + ';color:' + edgeColor + '">' + edgeStr + '</td>';
     html += '</tr>';
   });
-  html += '</tbody></table></div>';
+
+  html += '</tbody></table>';
+  html += '<div style="font-size:10px;color:var(--muted);margin-top:8px">Market odds are opening lines from BetMGM/DraftKings on Selection Sunday. Lines move — check your book for current prices. Model uses pre-tournament KenPom ratings only.</div>';
+  html += '</div>';
   return html;
 }
 
@@ -6174,23 +6417,214 @@ function runSimulation(simRes) {
 }
 
 function bkShort(name) {
-  if (!name || name.length <= 11) return name;
+  if (!name) return '';
   const abbrevs = {
-    'North Carolina':'UNC','Michigan State':'Mich St','Connecticut':'UConn',
-    'Florida State':'Fla St','Mississippi State':'Miss St','Virginia Tech':'Va Tech',
-    'West Virginia':'WVU','Washington State':'Wash St','Iowa State':'Iowa St',
-    'Ohio State':'Ohio St','Penn State':'Penn St','Arizona State':'AZ St',
+    'North Carolina':'UNC','Michigan State':'Mich St.','Connecticut':'UConn',
+    'Florida State':'Fla St.','Mississippi State':'Miss St.','Virginia Tech':'Va Tech',
+    'West Virginia':'WVU','Washington State':'Wash St.','Iowa State':'Iowa St.',
+    'Ohio State':'Ohio St.','Penn State':'Penn St.','Arizona State':'AZ St.',
     'Kansas State':'K-State','Mississippi':'Ole Miss','Southern California':'USC',
-    'Texas A&M':'Texas A&M','Tennessee':'Tennessee','Pittsburgh':'Pitt',
-    'Saint Mary\'s (CA)':'St Mary\'s','Arkansas':'Arkansas'
+    'Texas A&M':'Texas A&M',"Saint Mary's (CA)":"St. Mary's",
+    'Northern Iowa':'N. Iowa','South Florida':'S. Florida',
+    'North Dakota State':'NDSU','South Dakota State':'SDSU',
+    'Cal Baptist':'Cal Bapt.','SIU Edwardsville':'SIUE',
+    "Prairie View A&M":'Prairie Vw',"St. John's":"St. John's",
+    "Mount St. Mary's":"Mt. St. M",'North Dakota St.':'N.D. State','Arkansas':'Arkansas','Tennessee':'Tennessee'
   };
   if (abbrevs[name]) return abbrevs[name];
+  if (name.length <= 13) return name;
   const parts = name.split(' ');
-  if (parts.length === 1) return name.slice(0,11);
-  return parts[0].slice(0,8) + (parts.length>1 ? ' ' + parts[parts.length-1].slice(0,3) : '');
+  if (parts.length === 1) return name.slice(0,12);
+  if (parts[0].length <= 3 && parts.length >= 2) {
+    const two = parts[0] + ' ' + parts[1];
+    if (two.length <= 12) return two;
+  }
+  const lastWord = parts[parts.length-1];
+  const suffix = lastWord.endsWith('.') ? lastWord.slice(0,4) : lastWord.slice(0,3) + '.';
+  return parts[0].slice(0,9) + ' ' + suffix;
 }
 
 // ── INIT ───────────────────────────────────────────────────────────────────
+// ── BRACKET NAVIGATION HELPERS ────────────────────────────────
+// Navigate from bracket to other tabs with teams pre-loaded
+
+// Track which game cards have their detail panel expanded
+const _bkExpanded = new Set();
+
+// Show a "← Back to Bracket" pill at top of target tab
+function showReturnToBracket() {
+  // Remove any existing return banners first
+  document.querySelectorAll('.bk-return-banner').forEach(el => el.remove());
+  const banner = document.createElement('div');
+  banner.className = 'bk-return-banner';
+  banner.innerHTML =
+    '<button onclick="setBracketTab(_bRegionTab||\'East\');setTab(\'bracket\',document.querySelector(\'.cv-tab[onclick*=\\\"bracket\\\"]\'))" ' +
+    'style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;font-size:12px;font-weight:600;' +
+    'background:var(--surface2);color:var(--muted);border:1px solid var(--border);border-radius:6px;' +
+    'cursor:pointer;font-family:DM Sans,sans-serif;margin-bottom:12px">← Back to Bracket</button>';
+  // Insert at the top of whichever panel is active
+  const activePanel = document.querySelector('.tab-panel.active');
+  if (activePanel && activePanel.firstChild) {
+    activePanel.insertBefore(banner, activePanel.firstChild);
+  }
+}
+
+function bkGoMatchup(t1name, t2name) {
+  const matchupBtn = document.querySelector('.cv-tab[onclick*="matchup"]');
+  if (!matchupBtn) return;
+  if (typeof selectTeam === 'function') {
+    selectTeam('a', t1name);
+    selectTeam('b', t2name);
+    const yrA = $$('sel-year-a'), yrB = $$('sel-year-b');
+    if (yrA) yrA.value = '2026';
+    if (yrB) yrB.value = '2026';
+    if (typeof calc === 'function') calc();
+  }
+  if (typeof setTab === 'function') setTab('matchup', matchupBtn);
+  showReturnToBracket();
+}
+
+function bkGoIntel(teamName) {
+  const intelBtn = document.querySelector('.cv-tab[onclick*="history"]');
+  if (!intelBtn) return;
+  if (typeof selectHistTeam === 'function') {
+    selectHistTeam(teamName);
+  } else {
+    const hi = $$('hist-team-input');
+    if (hi) { hi.value = teamName; hi.dataset.team = teamName; }
+  }
+  if (typeof setTab === 'function') setTab('history', intelBtn);
+  showReturnToBracket();
+}
+
+function bkToggleExpand(gameId) {
+  if (_bkExpanded.has(gameId)) {
+    _bkExpanded.delete(gameId);
+  } else {
+    _bkExpanded.add(gameId);
+  }
+  renderBracket();
+}
+
+// ── AI BRACKET ANALYSIS ────────────────────────────────────────────────────
+// Fires when 63 picks complete. Qualitative only — no EM estimates or spread claims.
+async function generateBracketAnalysis() {
+  const outEl = $$('bracket-ai-output');
+  if (!outEl || !_bracket) return;
+
+  const apiKey = typeof getApiKey === 'function' ? getApiKey() : null;
+  if (!apiKey) {
+    outEl.style.display = 'block';
+    outEl.innerHTML = '<div style="font-size:12px;color:var(--warn);padding:10px;background:var(--surface2);border-radius:8px;margin-top:8px">API key required — add your Claude API key via the settings link in the Matchup tab.</div>';
+    return;
+  }
+
+  outEl.style.display = 'block';
+  outEl.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:10px;background:var(--surface2);border-radius:8px;margin-top:8px">Analyzing your bracket against simulations...</div>';
+
+  // 2000-run quick simulation for prompt context
+  const teams = [];
+  const seen = new Set();
+  REGIONS.forEach(region => {
+    const rd = _bracket.regions[region];
+    for (let s = 1; s <= 16; s++) {
+      const t = rd[s];
+      if (t && !t.ffPair && !seen.has(t.name)) { seen.add(t.name); teams.push(t); }
+    }
+  });
+  const N2 = 2000;
+  const counts = {};
+  teams.forEach(t => { counts[t.name] = {R64:0,R32:0,S16:0,E8:0,F4:0,CHAMP:0}; });
+  const roundKeys = ['R64','R32','S16','E8','F4','CHAMP'];
+  const roundVals = {R64:1,R32:2,S16:3,E8:4,F4:5,CHAMP:6};
+  for (let sim = 0; sim < N2; sim++) {
+    const simRes = {};
+    runSimulation(simRes);
+    const G2 = _bracket.games;
+    roundKeys.forEach(rnd => {
+      Object.values(G2).filter(g => g.round === rnd).forEach(g => {
+        const w = simRes[g.id];
+        if (w && counts[w]) {
+          for (let i = 0; i < roundVals[rnd]; i++) counts[w][roundKeys[i]]++;
+        }
+      });
+    });
+  }
+  teams.sort((a,b) => (counts[b.name]?.CHAMP||0) - (counts[a.name]?.CHAMP||0));
+
+  const G = _bracket.games;
+  const getRndPicks = rnd => Object.values(G).filter(g => g.round===rnd && _bracket.results[g.id]).map(g => _bracket.results[g.id]);
+  const champPick = _bracket.results['CHAMP'] || 'Not picked';
+  const champSimPct = ((counts[champPick]?.CHAMP||0)/N2*100).toFixed(1);
+
+  const divergences = [];
+  Object.values(G).forEach(g => {
+    if (!g.t1 || !g.t2 || !_bracket.results[g.id] || g.round==='FF') return;
+    const proj = (g.t1.em||0) >= (g.t2.em||0) ? g.t1.name : g.t2.name;
+    const pick = _bracket.results[g.id];
+    if (proj !== pick) {
+      const wp = winProb(g.t1.em||0, g.t2.em||0);
+      const fwp = (g.t1.em||0) >= (g.t2.em||0) ? wp : 1-wp;
+      divergences.push(pick + ' over ' + proj + ' (' + (fwp*100).toFixed(0) + '% model fav)');
+    }
+  });
+
+  const modelFav = teams.slice(0,6).map(t => {
+    const c = ((counts[t.name]?.CHAMP||0)/N2*100).toFixed(1);
+    const mkt = BRACKET_MARKET_ODDS_2026[t.name];
+    const edge = mkt ? ((counts[t.name]?.CHAMP||0)/N2*100 - mkt).toFixed(1) : null;
+    return t.name + ' #' + (t.seed||'?') + ': model ' + c + '%' + (mkt ? ', market ' + mkt.toFixed(1) + '%, edge ' + (edge>=0?'+':'') + edge + '%' : '');
+  }).join('\n');
+
+  const currentYear = (typeof CV_META !== 'undefined' && CV_META.current_year) ? CV_META.current_year : 2026;
+  const { made, total } = countPicks();
+  const partialNote = made < total ? ' NOTE: This bracket is ' + made + '/' + total + ' picks complete — analyze what has been picked so far.' : '';
+
+  const prompt = currentYear + ' NCAA Tournament bracket analysis.' + partialNote + '\n\n' +
+    'USER PICKS:\nChampion: ' + champPick + ' (model: ' + champSimPct + '% champ probability)\n' +
+    'Final Four: ' + (getRndPicks('F4').join(', ')||'—') + '\n' +
+    'Elite Eight: ' + (getRndPicks('E8').join(', ')||'—') + '\n' +
+    'Sweet 16: ' + (getRndPicks('S16').join(', ')||'—') + '\n\n' +
+    'MODEL SIMULATION TOP CONTENDERS:\n' + modelFav + '\n\n' +
+    'UPSETS PICKED (' + divergences.length + '):\n' +
+    (divergences.slice(0,8).join('\n')||'None') + '\n\n' +
+    'Write 4 paragraphs: (1) champion pick — simulation%, path, risks; (2) most interesting upset picks; ' +
+    '(3) any Final Four team over- or under-valued vs model; (4) overall bracket character and pool strategy. ' +
+    'No EM estimates. No spread claims. No bold every sentence. No header. Reference actual numbers. ' +
+    'Search for injury news if available.';
+
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 600,
+        system: 'You are a college basketball analytics expert. Reference specific simulation numbers. No EM estimates, no spread predictions. No bold every sentence. No header. Start directly with analysis.',
+        messages: [{ role: 'user', content: prompt }],
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }]
+      })
+    });
+    const data = await resp.json();
+    const text = (Array.isArray(data.content) ? data.content : []).filter(b => b && b.type==='text').map(b => b.text).join('');
+    if (!text) throw new Error('No response');
+    outEl.innerHTML =
+      '<div style="background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--blue);border-radius:8px;padding:14px 16px;margin-top:8px">' +
+        '<div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">AI Bracket Analysis</div>' +
+        '<div style="font-size:13px;color:var(--text);line-height:1.65">' +
+          (typeof mdToHtml==='function' ? mdToHtml(text) : text.replace(/\n/g,'<br>')) +
+        '</div>' +
+      '</div>';
+  } catch(e) {
+    outEl.innerHTML = '<div style="font-size:12px;color:var(--warn);padding:10px;background:var(--surface2);border-radius:8px;margin-top:8px">Analysis failed — check your API key.</div>';
+  }
+}
+
 
 </script>
 </body>
